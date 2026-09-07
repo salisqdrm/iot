@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="id" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Kualitas Udara Sekolah</title>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<style>
+  body { background:#0f172a; }
+  .card-status::before{
+    content:""; position:absolute; top:0; left:0; right:0; height:5px;
+    background:var(--status-color, var(--bs-secondary));
+    border-top-left-radius: var(--bs-card-border-radius);
+    border-top-right-radius: var(--bs-card-border-radius);
+  }
+  .card-status{ position:relative; overflow:hidden; }
+  .metric-val{ font-size:1.5rem; font-weight:700; line-height:1; }
+  .metric-lbl{ font-size:.7rem; color:var(--bs-secondary-color); text-transform:uppercase; }
+</style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom mb-4">
+  <div class="container">
+    <span class="navbar-brand mb-0 h1 d-flex align-items-center gap-2">
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="text-success" viewBox="0 0 16 16">
+        <path d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6ZM6.646 4.646c.376-.377.826-.674 1.294-.94V16A5 5 0 0 1 3 11c0-.891.311-1.85.804-2.756z"/>
+      </svg>
+      Monitor Kualitas Udara Sekolah
+    </span>
+    <span id="connBadge" class="badge rounded-pill text-bg-danger">menghubungkan...</span>
+  </div>
+</nav>
+
+<div class="container pb-4">
+
+  <p class="text-secondary small mb-4">
+    Sumber: broker MQTT publik (demo) — topik <code>sekolah/+/data</code>.
+    Kartu muncul otomatis begitu sebuah node pertama kali mengirim data, jadi jumlah kartu
+    mengikuti jumlah unit fisik yang benar-benar aktif — bukan angka tetap.
+    Kartu jadi abu-abu (OFFLINE) kalau node itu berhenti kirim data &gt;15 detik.
+  </p>
+
+  <div id="emptyState" class="alert alert-secondary text-center">
+    Belum ada data masuk. Pastikan simulasi Wokwi sedang berjalan dan node berhasil konek WiFi/MQTT.
+  </div>
+
+  <div class="row g-3" id="grid"></div>
+
+</div>
+
+<script>
+const OFFLINE_TIMEOUT_MS = 15000;
+const STATUS_COLOR = { AMAN: "#22c55e", WASPADA: "#eab308", BAHAYA: "#ef4444" };
+const STATUS_BADGE = { AMAN: "text-bg-success", WASPADA: "text-bg-warning", BAHAYA: "text-bg-danger" };
+
+const state = {};   // diisi dinamis: { roomId: {co2, suhu, lembap, status, lastSeen} }
+
+const grid = document.getElementById("grid");
+const emptyState = document.getElementById("emptyState");
+
+function render() {
+  const rooms = Object.keys(state).sort((a, b) => Number(a) - Number(b));
+  emptyState.classList.toggle("d-none", rooms.length > 0);
+
+  grid.innerHTML = "";
+  const now = Date.now();
+  rooms.forEach((room) => {
+    const s = state[room];
+    const offline = (now - s.lastSeen) > OFFLINE_TIMEOUT_MS;
+    const stripeColor = offline ? "#475569" : (STATUS_COLOR[s.status] || "#475569");
+    const badgeClass = offline ? "text-bg-secondary" : (STATUS_BADGE[s.status] || "text-bg-secondary");
+    const badgeText = offline ? "OFFLINE" : (s.status || "-");
+
+    const col = document.createElement("div");
+    col.className = "col-6 col-md-4 col-lg-3";
+    col.innerHTML = `
+      <div class="card card-status h-100" style="--status-color:${stripeColor}">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <h2 class="h6 mb-0">Kelas ${room}</h2>
+            <span class="badge ${badgeClass}">${badgeText}</span>
+          </div>
+          <div class="row text-center g-2">
+            <div class="col-4">
+              <div class="metric-val">${s.co2 != null ? Math.round(s.co2) : "--"}</div>
+              <div class="metric-lbl">CO2 ppm</div>
+            </div>
+            <div class="col-4">
+              <div class="metric-val">${s.suhu != null ? s.suhu.toFixed(1) : "--"}°</div>
+              <div class="metric-lbl">Suhu</div>
+            </div>
+            <div class="col-4">
+              <div class="metric-val">${s.lembap != null ? Math.round(s.lembap) : "--"}%</div>
+              <div class="metric-lbl">Lembap</div>
+            </div>
+          </div>
+          <div class="text-secondary mt-2" style="font-size:.7rem;">
+            Update terakhir: ${new Date(s.lastSeen).toLocaleTimeString()}
+          </div>
+        </div>
+      </div>
+    `;
+    grid.appendChild(col);
+  });
+}
+render();
+setInterval(render, 2000); // agar status OFFLINE muncul otomatis walau tak ada pesan baru
+
+// --- Koneksi MQTT via WebSocket (tidak berubah dari versi sebelumnya) ---
+// Broker publik HANYA untuk demo/simulasi. Untuk produksi, ganti dengan broker
+// sendiri (Mosquitto self-hosted / HiveMQ Cloud) + autentikasi & TLS.
+const client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt");
+const connBadge = document.getElementById("connBadge");
+
+client.on("connect", () => {
+  connBadge.textContent = "terhubung";
+  connBadge.className = "badge rounded-pill text-bg-success";
+  client.subscribe("sekolah/+/data");
+});
+client.on("reconnect", () => {
+  connBadge.textContent = "menghubungkan ulang...";
+  connBadge.className = "badge rounded-pill text-bg-danger";
+});
+client.on("close", () => {
+  connBadge.textContent = "terputus";
+  connBadge.className = "badge rounded-pill text-bg-danger";
+});
+
+client.on("message", (topic, message) => {
+  try {
+    const data = JSON.parse(message.toString());
+    const room = data.room;
+    if (room == null) return;
+    state[room] = {
+      co2: data.co2, suhu: data.suhu, lembap: data.lembap,
+      status: data.status, lastSeen: Date.now()
+    };
+    render();
+  } catch (e) {
+    console.error("Payload tidak valid:", message.toString());
+  }
+});
+</script>
+</body>
+</html>
